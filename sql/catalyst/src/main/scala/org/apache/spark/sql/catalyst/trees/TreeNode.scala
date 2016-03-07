@@ -316,17 +316,25 @@ abstract class TreeNode[BaseType <: TreeNode[BaseType]] extends Product {
         } else {
           Some(arg)
         }
-      case m: Map[_, _] => m.mapValues {
-        case arg: TreeNode[_] if containsChild(arg) =>
-          val newChild = nextOperation(arg.asInstanceOf[BaseType], rule)
-          if (!(newChild fastEquals arg)) {
-            changed = true
-            newChild
-          } else {
-            arg
-          }
-        case other => other
-      }.view.force // `mapValues` is lazy and we need to force it to materialize
+      case m: Map[_, _] =>
+        var mapChanged = false
+        val newMap = m.mapValues {
+          case arg: TreeNode[_] if containsChild(arg) =>
+            val newChild = nextOperation(arg.asInstanceOf[BaseType], rule)
+            if (!(newChild fastEquals arg)) {
+              changed = true
+              mapChanged = true
+              newChild
+            } else {
+              arg
+            }
+          case other => other
+        }
+        if (mapChanged) {
+          newMap.view.force // `mapValues` is lazy and we need to force it to materialize
+        } else {
+          m
+        }
       case d: DataType => d // Avoid unpacking Structs
       case args: Traversable[_] => args.map {
         case arg: TreeNode[_] if containsChild(arg) =>
