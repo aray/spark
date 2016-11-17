@@ -15,30 +15,31 @@
  * limitations under the License.
  */
 
-// this function works exactly the same as UIUtils.formatDuration
-function formatDuration(milliseconds) {
-  if (milliseconds < 100) {
-    return milliseconds + " ms";
+var appLimit = -1;
+
+function setAppLimit(val) {
+    appLimit = val;
+}
+
+function makeIdNumeric(id) {
+  var strs = id.split("_");
+  if (strs.length < 3) {
+    return id;
   }
-  var seconds = milliseconds * 1.0 / 1000;
-  if (seconds < 1) {
-    return seconds.toFixed(1) + " s";
+  var appSeqNum = strs[2];
+  var resl = strs[0] + "_" + strs[1] + "_";
+  var diff = 10 - appSeqNum.length;
+  while (diff > 0) {
+      resl += "0"; // padding 0 before the app sequence number to make sure it has 10 characters
+      diff--;
   }
-  if (seconds < 60) {
-    return seconds.toFixed(0) + " s";
-  }
-  var minutes = seconds / 60;
-  if (minutes < 10) {
-    return minutes.toFixed(1) + " min";
-  } else if (minutes < 60) {
-    return minutes.toFixed(0) + " min";
-  }
-  var hours = minutes / 60;
-  return hours.toFixed(1) + " h";
+  resl += appSeqNum;
+  return resl;
 }
 
 function formatDate(date) {
-  return date.split(".")[0].replace("T", " ");
+  if (date <= 0) return "-";
+  else return date.split(".")[0].replace("T", " ");
 }
 
 function getParameterByName(name, searchString) {
@@ -62,6 +63,21 @@ jQuery.extend( jQuery.fn.dataTableExt.oSort, {
     }
 } );
 
+jQuery.extend( jQuery.fn.dataTableExt.oSort, {
+    "appid-numeric-pre": function ( a ) {
+        var x = a.match(/title="*(-?[0-9a-zA-Z\-\_]+)/)[1];
+        return makeIdNumeric(x);
+    },
+
+    "appid-numeric-asc": function ( a, b ) {
+        return ((a < b) ? -1 : ((a > b) ? 1 : 0));
+    },
+
+    "appid-numeric-desc": function ( a, b ) {
+        return ((a < b) ? 1 : ((a > b) ? -1 : 0));
+    }
+} );
+
 $(document).ajaxStop($.unblockUI);
 $(document).ajaxStart(function(){
     $.blockUI({ message: '<h3>Loading history summary...</h3>'});
@@ -79,7 +95,7 @@ $(document).ready(function() {
     requestedIncomplete = getParameterByName("showIncomplete", searchString);
     requestedIncomplete = (requestedIncomplete == "true" ? true : false);
 
-    $.getJSON("/api/v1/applications", function(response,status,jqXHR) {
+    $.getJSON("api/v1/applications?limit=" + appLimit, function(response,status,jqXHR) {
       var array = [];
       var hasMultipleAttempts = false;
       for (i in response) {
@@ -103,13 +119,17 @@ $(document).ready(function() {
         }
       }
 
-      var data = {"applications": array}
-      $.get("/static/historypage-template.html", function(template) {
+      var data = {
+        "uiroot": uiRoot,
+        "applications": array
+        }
+
+      $.get("static/historypage-template.html", function(template) {
         historySummary.append(Mustache.render($(template).filter("#history-summary-template").html(),data));
         var selector = "#history-summary-table";
         var conf = {
                     "columns": [
-                        {name: 'first'},
+                        {name: 'first', type: "appid-numeric"},
                         {name: 'second'},
                         {name: 'third'},
                         {name: 'fourth'},
@@ -117,8 +137,13 @@ $(document).ready(function() {
                         {name: 'sixth', type: "title-numeric"},
                         {name: 'seventh'},
                         {name: 'eighth'},
+                        {name: 'ninth'},
                     ],
-                    "autoWidth": false
+                    "columnDefs": [
+                        {"searchable": false, "targets": [5]}
+                    ],
+                    "autoWidth": false,
+                    "order": [[ 4, "desc" ]]
         };
 
         var rowGroupConf = {

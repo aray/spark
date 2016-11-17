@@ -54,7 +54,7 @@ trait RDDCheckpointTester { self: SparkFunSuite =>
     // Generate the final RDD using given RDD operation
     val baseRDD = generateFatRDD()
     val operatedRDD = op(baseRDD)
-    val parentRDD = operatedRDD.dependencies.headOption.orNull
+    val parentDependency = operatedRDD.dependencies.headOption.orNull
     val rddType = operatedRDD.getClass.getSimpleName
     val numPartitions = operatedRDD.partitions.length
 
@@ -82,7 +82,7 @@ trait RDDCheckpointTester { self: SparkFunSuite =>
     }
 
     // Test whether dependencies have been changed from its earlier parent RDD
-    assert(operatedRDD.dependencies.head.rdd != parentRDD)
+    assert(operatedRDD.dependencies.head != parentDependency)
 
     // Test whether the partitions have been changed from its earlier partitions
     assert(operatedRDD.partitions.toList != partitionsBeforeCheckpoint.toList)
@@ -500,7 +500,7 @@ class CheckpointSuite extends SparkFunSuite with RDDCheckpointTester with LocalS
   }
 
   runTest("CheckpointRDD with zero partitions") { reliableCheckpoint: Boolean =>
-    val rdd = new BlockRDD[Int](sc, Array[BlockId]())
+    val rdd = new BlockRDD[Int](sc, Array.empty[BlockId])
     assert(rdd.partitions.size === 0)
     assert(rdd.isCheckpointed === false)
     assert(rdd.isCheckpointedAndMaterialized === false)
