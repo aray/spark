@@ -114,13 +114,22 @@ object PageRank extends Logging {
     val personalized = srcId.isDefined
     val src: VertexId = srcId.getOrElse(-1L)
 
+    val vertexCount = graph.vertices.count()
+    val shouldSumTo = if (personalized) 1.0 else vertexCount.toDouble
+    val outDegrees = graph.outDegrees
+    val sinkCount = vertexCount - outDegrees.count()
+    val hasSink = sinkCount > 0
+    if (hasSink) {
+      logInfo(s"Graph has $sinkCount sinks requiring normalization which may slow computation.")
+    }
+
     // Initialize the PageRank graph with each edge attribute having
-    // weight 1/outDegree and each vertex with attribute resetProb.
+    // weight 1/outDegree and each vertex with attribute 1.0.
     // When running personalized pagerank, only the source vertex
-    // has an attribute resetProb. All others are set to 0.
+    // has an attribute 1.0. All others are set to 0.
     var rankGraph: Graph[Double, Double] = graph
       // Associate the degree with each vertex
-      .outerJoinVertices(graph.outDegrees) { (vid, vdata, deg) => deg.getOrElse(0) }
+      .outerJoinVertices(outDegrees) { (vid, vdata, deg) => deg.getOrElse(0) }
       // Set the weight on the edges based on the degree
       .mapTriplets( e => 1.0 / e.srcAttr, TripletFields.Src )
       // Set the vertex attributes to the initial pagerank values
@@ -153,6 +162,12 @@ object PageRank extends Logging {
       rankGraph = rankGraph.outerJoinVertices(rankUpdates) {
         (id, oldRank, msgSumOpt) => rPrb(src, id) + (1.0 - resetProb) * msgSumOpt.getOrElse(0.0)
       }.cache()
+
+      if (hasSink) {
+        val sum: Double = rankGraph.vertices.map(_._2).sum()
+        val normFactor = shouldSumTo / sum
+        rankGraph = rankGraph.mapVertices((vid, pr) => pr * normFactor)
+      }
 
       rankGraph.edges.foreachPartition(x => {}) // also materializes rankGraph.vertices
       logInfo(s"PageRank finished iteration $iteration.")
@@ -296,11 +311,20 @@ object PageRank extends Logging {
     val personalized = srcId.isDefined
     val src: VertexId = srcId.getOrElse(-1L)
 
+    val vertexCount = graph.vertices.count()
+    val shouldSumTo = if (personalized) 1.0 else vertexCount.toDouble
+    val outDegrees = graph.outDegrees
+    val sinkCount = vertexCount - outDegrees.count()
+    val hasSink = sinkCount > 0
+    if (hasSink) {
+      logInfo(s"Graph has $sinkCount sinks requiring normalization which may slow computation.")
+    }
+
     // Initialize the pagerankGraph with each edge attribute
     // having weight 1/outDegree and each vertex with attribute 1.0.
     val pagerankGraph: Graph[(Double, Double), Double] = graph
       // Associate the degree with each vertex
-      .outerJoinVertices(graph.outDegrees) {
+      .outerJoinVertices(outDegrees) {
         (vid, vdata, deg) => deg.getOrElse(0)
       }
       // Set the weight on the edges based on the degree
@@ -353,9 +377,19 @@ object PageRank extends Logging {
         vertexProgram(id, attr, msgSum)
     }
 
-    Pregel(pagerankGraph, initialMessage, activeDirection = EdgeDirection.Out)(
+    val rankGraph = Pregel(pagerankGraph, initialMessage, activeDirection = EdgeDirection.Out)(
       vp, sendMessage, messageCombiner)
       .mapVertices((vid, attr) => attr._1)
+
+    // TODO: fix me
+    if (hasSink) {
+      val sum: Double = rankGraph.vertices.map(_._2).sum()
+      val normFactor = shouldSumTo / sum
+      rankGraph.mapVertices((vid, pr) => pr * normFactor)
+    } else {
+      rankGraph
+    }
+
   } // end of deltaPageRank
 
 }
