@@ -229,4 +229,30 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
 
     }
   }
+
+  test("Loop with sink PageRank") {
+    withSpark { sc =>
+      val edges = sc.parallelize((1L, 2L) :: (2L, 3L) :: (3L, 1L) :: (1L, 4L) :: Nil)
+      val g = Graph.fromEdgeTuples(edges, 1)
+      val resetProb = 0.15
+      val tol = 0.0001
+      val numIter = 50
+      val errorTol = 1.0e-5
+
+      val staticRanks = g.staticPageRank(numIter, resetProb).vertices
+      val dynamicRanks = g.pageRank(tol, resetProb).vertices
+//      assert(compareRanks(staticRanks, dynamicRanks) < errorTol)
+
+      // Computed in igraph 1.0 w/ R bindings:
+      // > page_rank(graph_from_literal( A -+ B -+ C -+ A -+ D))
+      // Alternatively in NetworkX 1.11:
+      // > nx.pagerank(nx.DiGraph([(1,2),(2,3),(3,1),(1,4)]))
+      // We multiply by the number of vertices to account for difference in normalization
+      val igraphPR = Seq(0.3078534, 0.2137622, 0.2646223, 0.2137622).map(_ * 4)
+      val ranks = VertexRDD(sc.parallelize(1L to 4L zip igraphPR))
+//      assert(compareRanks(staticRanks, ranks) < errorTol)
+      assert(compareRanks(dynamicRanks, ranks) < errorTol)
+
+    }
+  }
 }
