@@ -114,22 +114,21 @@ object PageRank extends Logging {
     val personalized = srcId.isDefined
     val src: VertexId = srcId.getOrElse(-1L)
 
-    val vertexCount = graph.vertices.count()
-    val shouldSumTo = if (personalized) 1.0 else vertexCount.toDouble
-    val outDegrees = graph.outDegrees
-    val sinkCount = vertexCount - outDegrees.count()
-    val hasSink = sinkCount > 0
+    val degGraph: Graph[Int, ED] = graph
+      // Associate the degree with each vertex
+      .outerJoinVertices(graph.outDegrees) { (vid, vdata, deg) => deg.getOrElse(0) }
+
+    val sinks: VertexRDD[Int] = degGraph.vertices.filter(_._2 == 0).cache()
+    val hasSink = sinks.count() > 0
     if (hasSink) {
-      logInfo(s"Graph has $sinkCount sinks requiring normalization which may slow computation.")
+      logInfo(s"Graph has sinks which may slow computation of pagerank.")
     }
 
     // Initialize the PageRank graph with each edge attribute having
     // weight 1/outDegree and each vertex with attribute 1.0.
     // When running personalized pagerank, only the source vertex
     // has an attribute 1.0. All others are set to 0.
-    var rankGraph: Graph[Double, Double] = graph
-      // Associate the degree with each vertex
-      .outerJoinVertices(outDegrees) { (vid, vdata, deg) => deg.getOrElse(0) }
+    var rankGraph: Graph[Double, Double] = degGraph
       // Set the weight on the edges based on the degree
       .mapTriplets( e => 1.0 / e.srcAttr, TripletFields.Src )
       // Set the vertex attributes to the initial pagerank values
@@ -149,25 +148,27 @@ object PageRank extends Logging {
       val rankUpdates = rankGraph.aggregateMessages[Double](
         ctx => ctx.sendToDst(ctx.srcAttr * ctx.attr), _ + _, TripletFields.Src)
 
+      val rankFromSinks: Double = if (hasSink) {
+        rankGraph.outerJoinVertices(sinks) {
+          (id, rank, zeroOpt) => if (zeroOpt.isDefined) rank else 0.0
+        }.vertices.map(_._2).sum() / graph.numVertices * (1.0 - resetProb)
+      } else {
+        0.0
+      }
+
       // Apply the final rank updates to get the new ranks, using join to preserve ranks of vertices
       // that didn't receive a message. Requires a shuffle for broadcasting updated ranks to the
       // edge partitions.
       prevRankGraph = rankGraph
       val rPrb = if (personalized) {
-        (src: VertexId, id: VertexId) => resetProb * delta(src, id)
+        (src: VertexId, id: VertexId) => resetProb * delta(src, id) + rankFromSinks // todo: fix
       } else {
-        (src: VertexId, id: VertexId) => resetProb
+        (src: VertexId, id: VertexId) => resetProb + rankFromSinks
       }
 
       rankGraph = rankGraph.outerJoinVertices(rankUpdates) {
         (id, oldRank, msgSumOpt) => rPrb(src, id) + (1.0 - resetProb) * msgSumOpt.getOrElse(0.0)
       }.cache()
-
-      if (hasSink) {
-        val sum: Double = rankGraph.vertices.map(_._2).sum()
-        val normFactor = shouldSumTo / sum
-        rankGraph = rankGraph.mapVertices((vid, pr) => pr * normFactor)
-      }
 
       rankGraph.edges.foreachPartition(x => {}) // also materializes rankGraph.vertices
       logInfo(s"PageRank finished iteration $iteration.")
