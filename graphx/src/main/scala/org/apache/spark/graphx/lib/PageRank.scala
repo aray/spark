@@ -114,6 +114,7 @@ object PageRank extends Logging {
     val personalized = srcId.isDefined
     val src: VertexId = srcId.getOrElse(-1L)
 
+    val numVertices = graph.numVertices
     val degGraph: Graph[Int, ED] = graph
       // Associate the degree with each vertex
       .outerJoinVertices(graph.outDegrees) { (vid, vdata, deg) => deg.getOrElse(0) }
@@ -151,7 +152,7 @@ object PageRank extends Logging {
       val rankFromSinks: Double = if (hasSink) {
         rankGraph.outerJoinVertices(sinks) {
           (id, rank, zeroOpt) => if (zeroOpt.isDefined) rank else 0.0
-        }.vertices.values.sum() / graph.numVertices * (1.0 - resetProb)
+        }.vertices.values.sum() * (1.0 - resetProb)
       } else {
         0.0
       }
@@ -161,9 +162,9 @@ object PageRank extends Logging {
       // edge partitions.
       prevRankGraph = rankGraph
       val rPrb = if (personalized) {
-        (src: VertexId, id: VertexId) => resetProb * delta(src, id) + rankFromSinks // todo: fix
+        (src: VertexId, id: VertexId) => (resetProb + rankFromSinks) * delta(src, id)
       } else {
-        (src: VertexId, id: VertexId) => resetProb + rankFromSinks
+        (src: VertexId, id: VertexId) => resetProb + rankFromSinks / numVertices
       }
 
       rankGraph = rankGraph.outerJoinVertices(rankUpdates) {
@@ -313,66 +314,80 @@ object PageRank extends Logging {
     val personalized = srcId.isDefined
     val src: VertexId = srcId.getOrElse(-1L)
 
-    // Initialize the pagerankGraph with each edge attribute
-    // having weight 1/outDegree and each vertex with attribute 1.0.
-    val pagerankGraph: Graph[(Double, Double), Double] = graph
+    val numVertices = graph.numVertices
+    val degGraph: Graph[Int, ED] = graph
       // Associate the degree with each vertex
-      .outerJoinVertices(graph.outDegrees) {
-        (vid, vdata, deg) => deg.getOrElse(0)
-      }
+      .outerJoinVertices(graph.outDegrees) { (vid, vdata, deg) => deg.getOrElse(0) }
+
+    val sinks: VertexRDD[Int] = degGraph.vertices.filter(_._2 == 0).cache()
+    val hasSink = sinks.count() > 0
+    if (hasSink) {
+      logInfo(s"Graph has sinks which may slow computation of pagerank.")
+    }
+
+    // Initialize the PageRank graph with each edge attribute having
+    // weight 1/outDegree and each vertex with attribute 1.0.
+    // When running personalized pagerank, only the source vertex
+    // has an attribute 1.0. All others are set to 0.
+    var rankGraph: Graph[(Double, Double), Double] = degGraph
       // Set the weight on the edges based on the degree
-      .mapTriplets( e => 1.0 / e.srcAttr )
-      // Set the vertex attributes to (initialPR, delta = 0)
+      .mapTriplets( e => 1.0 / e.srcAttr, TripletFields.Src )
+      // Set the vertex attributes to the initial pagerank values
       .mapVertices { (id, attr) =>
-        if (id == src) (1.0, Double.NegativeInfinity) else (0.0, 0.0)
-      }
-      .cache()
-
-    // Define the three functions needed to implement PageRank in the GraphX
-    // version of Pregel
-    def vertexProgram(id: VertexId, attr: (Double, Double), msgSum: Double): (Double, Double) = {
-      val (oldPR, lastDelta) = attr
-      val newPR = oldPR + (1.0 - resetProb) * msgSum
-      (newPR, newPR - oldPR)
+      if (!(id != src && personalized)) (1.0, Double.PositiveInfinity) else (0.0, 0.0)
     }
 
-    def personalizedVertexProgram(id: VertexId, attr: (Double, Double),
-      msgSum: Double): (Double, Double) = {
-      val (oldPR, lastDelta) = attr
-      var teleport = oldPR
-      val delta = if (src==id) resetProb else 0.0
-      teleport = oldPR*delta
+    def delta(u: VertexId, v: VertexId): Double = { if (u == v) 1.0 else 0.0 }
 
-      val newPR = teleport + (1.0 - resetProb) * msgSum
-      val newDelta = if (lastDelta == Double.NegativeInfinity) newPR else newPR - oldPR
-      (newPR, newDelta)
-    }
+    var aboveTolCount = 1L
+    var iteration = 0
+    var prevRankGraph: Graph[(Double, Double), Double] = null
+    while (aboveTolCount > 0) {
+      rankGraph.cache()
 
-    def sendMessage(edge: EdgeTriplet[(Double, Double), Double]) = {
-      if (edge.srcAttr._2 > tol) {
-        Iterator((edge.dstId, edge.srcAttr._2 * edge.attr))
+      // Compute the outgoing rank contributions of each vertex, perform local preaggregation, and
+      // do the final aggregation at the receiving vertices. Requires a shuffle for aggregation.
+      val rankUpdates = rankGraph.aggregateMessages[Double](
+        ctx => ctx.sendToDst(ctx.srcAttr._1 * ctx.attr), _ + _, TripletFields.Src)
+
+      val rankFromSinks: Double = if (hasSink) {
+        rankGraph.outerJoinVertices(sinks) {
+          (id, rankAndDelta, zeroOpt) => if (zeroOpt.isDefined) rankAndDelta._1 else 0.0
+        }.vertices.values.sum() * (1.0 - resetProb)
       } else {
-        Iterator.empty
+        0.0
       }
+
+      //TODO: UPDATE COMMENTS IN ALL IMPL
+      // Apply the final rank updates to get the new ranks, using join to preserve ranks of vertices
+      // that didn't receive a message. Requires a shuffle for broadcasting updated ranks to the
+      // edge partitions.
+      prevRankGraph = rankGraph
+      val rPrb = if (personalized) {
+        (src: VertexId, id: VertexId) => (resetProb + rankFromSinks) * delta(src, id)
+      } else {
+        (src: VertexId, id: VertexId) => resetProb + rankFromSinks / numVertices
+      }
+
+      rankGraph = rankGraph.outerJoinVertices(rankUpdates) {
+        (id, oldRankAndDelta, msgSumOpt) => {
+          val rank = rPrb(src, id) + (1.0 - resetProb) * msgSumOpt.getOrElse(0.0)
+          (rank, math.abs(rank - oldRankAndDelta._1))
+        }
+      }.cache()
+
+      rankGraph.edges.foreachPartition(x => {}) // also materializes rankGraph.vertices
+      aboveTolCount = rankGraph.vertices.filter(vd => vd._2._2 > tol).count()
+      logInfo(s"PageRank finished iteration $iteration, there is $aboveTolCount vertices with"
+        + " delta greater than tol=$tol.")
+      prevRankGraph.vertices.unpersist(false)
+      prevRankGraph.edges.unpersist(false)
+
+      iteration += 1
     }
+    sinks.unpersist(false)
 
-    def messageCombiner(a: Double, b: Double): Double = a + b
-
-    // The initial message received by all vertices in PageRank
-    val initialMessage = if (personalized) 0.0 else resetProb / (1.0 - resetProb)
-
-    // Execute a dynamic version of Pregel.
-    val vp = if (personalized) {
-      (id: VertexId, attr: (Double, Double), msgSum: Double) =>
-        personalizedVertexProgram(id, attr, msgSum)
-    } else {
-      (id: VertexId, attr: (Double, Double), msgSum: Double) =>
-        vertexProgram(id, attr, msgSum)
-    }
-
-    Pregel(pagerankGraph, initialMessage, activeDirection = EdgeDirection.Out)(
-      vp, sendMessage, messageCombiner)
-      .mapVertices((vid, attr) => attr._1)
+    rankGraph.mapVertices((vid, attr) => attr._1)
   } // end of deltaPageRank
 
 }

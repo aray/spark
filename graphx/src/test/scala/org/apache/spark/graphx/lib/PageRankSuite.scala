@@ -48,7 +48,6 @@ object GridPageRank {
       val rankFromSinks = oldPr.zip(outDegree).map {
         case (rank, deg) => if (deg == 0) rank else 0.0
       }.sum / (nRows * nCols) * (1.0 - resetProb)
-      println(s"rank from sinks: $rankFromSinks")
       for (ind <- 0 until (nRows * nCols)) {
         pr(ind) = resetProb + rankFromSinks + (1.0 - resetProb) *
           inNbrs(ind).map( nbr => oldPr(nbr) / outDegree(nbr)).sum
@@ -105,7 +104,6 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
       val staticRanks = starGraph.staticPersonalizedPageRank(0, numIter, resetProb).vertices.cache()
 
       val dynamicRanks = starGraph.personalizedPageRank(0, tol, resetProb).vertices.cache()
-      println(s"dynamicRanks: ${dynamicRanks.values.collect().toList}")
       assert(compareRanks(staticRanks, dynamicRanks) < errorTol)
 
       val parallelStaticRanks = starGraph
@@ -238,6 +236,7 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
       assert(compareRanks(staticRanks, ranks) < errorTol)
       assert(compareRanks(dynamicRanks, ranks) < errorTol)
 
+      //todo: reference tests for personalized pagerank
     }
   }
 }
