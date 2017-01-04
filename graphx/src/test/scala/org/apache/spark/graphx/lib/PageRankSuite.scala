@@ -73,10 +73,10 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
       val starGraph = GraphGenerators.starGraph(sc, nVertices).cache()
       val resetProb = 0.15
       val tol = 0.0001
-      val numIter = 50
-      val errorTol = 1.0e-4
+      val numIter = 70
+      val errorTol = 1.0e-5
 
-      val staticRanks = starGraph.staticPageRank(numIter, resetProb).vertices
+      val staticRanks = starGraph.staticPageRank(numIter, resetProb).vertices.cache()
       val dynamicRanks = starGraph.pageRank(tol, resetProb).vertices.cache()
       assert(compareRanks(staticRanks, dynamicRanks) < errorTol)
 
@@ -98,51 +98,33 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
       val nVertices = 100
       val starGraph = GraphGenerators.starGraph(sc, nVertices).cache()
       val resetProb = 0.15
+      val tol = 0.0001
+      val numIter = 70
       val errorTol = 1.0e-5
 
-      val staticRanks1 = starGraph.staticPersonalizedPageRank(0, numIter = 1, resetProb).vertices
-      val staticRanks2 = starGraph.staticPersonalizedPageRank(0, numIter = 2, resetProb)
-        .vertices.cache()
+      val staticRanks = starGraph.staticPersonalizedPageRank(0, numIter, resetProb).vertices.cache()
 
-      // Static PageRank should only take 2 iterations to converge
-      val notMatching = staticRanks1.innerZipJoin(staticRanks2) { (vid, pr1, pr2) =>
-        if (pr1 != pr2) 1 else 0
-      }.map { case (vid, test) => test }.sum
-      assert(notMatching === 0)
+      val dynamicRanks = starGraph.personalizedPageRank(0, tol, resetProb).vertices.cache()
+      println(s"dynamicRanks: ${dynamicRanks.values.collect().toList}")
+      assert(compareRanks(staticRanks, dynamicRanks) < errorTol)
 
-      val staticErrors = staticRanks2.map { case (vid, pr) =>
-        val correct = (vid > 0 && pr == 0.0) ||
-          (vid == 0 && pr == resetProb)
-        if (!correct) 1 else 0
-      }
-      assert(staticErrors.sum === 0)
-
-      val dynamicRanks = starGraph.personalizedPageRank(0, 0, resetProb).vertices.cache()
-      assert(compareRanks(staticRanks2, dynamicRanks) < errorTol)
-
-      val parallelStaticRanks1 = starGraph
-        .staticParallelPersonalizedPageRank(Array(0), 1, resetProb).mapVertices {
+      val parallelStaticRanks = starGraph
+        .staticParallelPersonalizedPageRank(Array(0), numIter, resetProb).mapVertices {
           case (vertexId, vector) => vector(0)
         }.vertices.cache()
-      assert(compareRanks(staticRanks1, parallelStaticRanks1) < errorTol)
-
-      val parallelStaticRanks2 = starGraph
-        .staticParallelPersonalizedPageRank(Array(0, 1), 2, resetProb).mapVertices {
-          case (vertexId, vector) => vector(0)
-        }.vertices.cache()
-      assert(compareRanks(staticRanks2, parallelStaticRanks2) < errorTol)
+      assert(compareRanks(staticRanks, parallelStaticRanks) < errorTol)
 
       // We have one outbound edge from 1 to 0
-      val otherStaticRanks2 = starGraph.staticPersonalizedPageRank(1, numIter = 2, resetProb)
+      val otherStaticRanks = starGraph.staticPersonalizedPageRank(1, numIter, resetProb)
         .vertices.cache()
       val otherDynamicRanks = starGraph.personalizedPageRank(1, 0, resetProb).vertices.cache()
-      val otherParallelStaticRanks2 = starGraph
+      val otherParallelStaticRanks = starGraph
         .staticParallelPersonalizedPageRank(Array(0, 1), 2, resetProb).mapVertices {
           case (vertexId, vector) => vector(1)
         }.vertices.cache()
-      assert(compareRanks(otherDynamicRanks, otherStaticRanks2) < errorTol)
-      assert(compareRanks(otherStaticRanks2, otherParallelStaticRanks2) < errorTol)
-      assert(compareRanks(otherDynamicRanks, otherParallelStaticRanks2) < errorTol)
+      assert(compareRanks(otherDynamicRanks, otherStaticRanks) < errorTol)
+      assert(compareRanks(otherStaticRanks, otherParallelStaticRanks) < errorTol)
+      assert(compareRanks(otherDynamicRanks, otherParallelStaticRanks) < errorTol)
     }
   } // end of test Star PersonalPageRank
 

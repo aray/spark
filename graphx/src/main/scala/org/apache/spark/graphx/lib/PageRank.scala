@@ -151,7 +151,7 @@ object PageRank extends Logging {
       val rankFromSinks: Double = if (hasSink) {
         rankGraph.outerJoinVertices(sinks) {
           (id, rank, zeroOpt) => if (zeroOpt.isDefined) rank else 0.0
-        }.vertices.map(_._2).sum() / graph.numVertices * (1.0 - resetProb)
+        }.vertices.values.sum() / graph.numVertices * (1.0 - resetProb)
       } else {
         0.0
       }
@@ -177,6 +177,7 @@ object PageRank extends Logging {
 
       iteration += 1
     }
+    sinks.unpersist(false)
 
     rankGraph
   }
@@ -312,20 +313,11 @@ object PageRank extends Logging {
     val personalized = srcId.isDefined
     val src: VertexId = srcId.getOrElse(-1L)
 
-    val vertexCount = graph.vertices.count()
-    val shouldSumTo = if (personalized) 1.0 else vertexCount.toDouble
-    val outDegrees = graph.outDegrees
-    val sinkCount = vertexCount - outDegrees.count()
-    val hasSink = sinkCount > 0
-    if (hasSink) {
-      logInfo(s"Graph has $sinkCount sinks requiring normalization which may slow computation.")
-    }
-
     // Initialize the pagerankGraph with each edge attribute
     // having weight 1/outDegree and each vertex with attribute 1.0.
     val pagerankGraph: Graph[(Double, Double), Double] = graph
       // Associate the degree with each vertex
-      .outerJoinVertices(outDegrees) {
+      .outerJoinVertices(graph.outDegrees) {
         (vid, vdata, deg) => deg.getOrElse(0)
       }
       // Set the weight on the edges based on the degree
@@ -378,19 +370,9 @@ object PageRank extends Logging {
         vertexProgram(id, attr, msgSum)
     }
 
-    val rankGraph = Pregel(pagerankGraph, initialMessage, activeDirection = EdgeDirection.Out)(
+    Pregel(pagerankGraph, initialMessage, activeDirection = EdgeDirection.Out)(
       vp, sendMessage, messageCombiner)
       .mapVertices((vid, attr) => attr._1)
-
-    // TODO: fix me
-    if (hasSink) {
-      val sum: Double = rankGraph.vertices.map(_._2).sum()
-      val normFactor = shouldSumTo / sum
-      rankGraph.mapVertices((vid, pr) => pr * normFactor)
-    } else {
-      rankGraph
-    }
-
   } // end of deltaPageRank
 
 }
