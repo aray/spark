@@ -81,6 +81,8 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
 
       // Computed in igraph 1.0 w/ R bindings:
       // > page_rank(make_star(100, mode = "in"))
+      // Alternatively in NetworkX 1.11:
+      // > nx.pagerank(nx.DiGraph([(x, 0) for x in range(1,100)]))
       // We multiply by the number of vertices to account for difference in normalization
       val centerRank = 0.462394787 * nVertices
       val othersRank = 0.005430356 * nVertices
@@ -115,11 +117,13 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
       // We have one outbound edge from 1 to 0
       val otherStaticRanks = starGraph.staticPersonalizedPageRank(1, numIter, resetProb)
         .vertices.cache()
-      val otherDynamicRanks = starGraph.personalizedPageRank(1, 0, resetProb).vertices.cache()
+      val otherDynamicRanks = starGraph.personalizedPageRank(1, tol, resetProb).vertices.cache()
       val otherParallelStaticRanks = starGraph
-        .staticParallelPersonalizedPageRank(Array(0, 1), 2, resetProb).mapVertices {
+        .staticParallelPersonalizedPageRank(Array(0, 1), numIter, resetProb).mapVertices {
           case (vertexId, vector) => vector(1)
         }.vertices.cache()
+      println(otherStaticRanks.collect().sorted.toList)
+      println(otherParallelStaticRanks.collect().sorted.toList)
       assert(compareRanks(otherDynamicRanks, otherStaticRanks) < errorTol)
       assert(compareRanks(otherStaticRanks, otherParallelStaticRanks) < errorTol)
       assert(compareRanks(otherDynamicRanks, otherParallelStaticRanks) < errorTol)
