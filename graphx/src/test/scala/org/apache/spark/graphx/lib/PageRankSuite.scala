@@ -122,11 +122,25 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
         .staticParallelPersonalizedPageRank(Array(0, 1), numIter, resetProb).mapVertices {
           case (vertexId, vector) => vector(1)
         }.vertices.cache()
-      println(otherStaticRanks.collect().sorted.toList)
-      println(otherParallelStaticRanks.collect().sorted.toList)
       assert(compareRanks(otherDynamicRanks, otherStaticRanks) < errorTol)
       assert(compareRanks(otherStaticRanks, otherParallelStaticRanks) < errorTol)
       assert(compareRanks(otherDynamicRanks, otherParallelStaticRanks) < errorTol)
+
+      // Computed in igraph 1.0 w/ R bindings:
+      // > page_rank(make_star(100, mode = "in"),
+      //   personalized = c(0, 1, rep(0, 98)), algo = "arpack")
+      // NOTE: We use the arpack algorithm as prpack (the default) redistributes rank to all
+      // vertices uniformly instead of just to the personalization source.
+      // Alternatively in NetworkX 1.11:
+      // > nx.pagerank(nx.DiGraph([(x, 0) for x in range(1,100)]),
+      //   personalization=dict([(x, 1 if x == 1 else 0) for x in range(0,100)]))
+      val centerRank = 0.4594595
+      val sourceRank = 0.5405405
+      val igraphPR = centerRank +: sourceRank +: Seq.fill(nVertices - 2)(0.0)
+      val ranks = VertexRDD(sc.parallelize(0L until nVertices zip igraphPR))
+      assert(compareRanks(otherStaticRanks, ranks) < errorTol)
+      assert(compareRanks(otherDynamicRanks, ranks) < errorTol)
+      assert(compareRanks(otherParallelStaticRanks, ranks) < errorTol)
     }
   } // end of test Star PersonalPageRank
 
@@ -222,7 +236,7 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
       val g = Graph.fromEdgeTuples(edges, 1)
       val resetProb = 0.15
       val tol = 0.0001
-      val numIter = 20
+      val numIter = 50
       val errorTol = 1.0e-5
 
       val staticRanks = g.staticPageRank(numIter, resetProb).vertices.cache()
@@ -240,7 +254,25 @@ class PageRankSuite extends SparkFunSuite with LocalSparkContext {
       assert(compareRanks(staticRanks, ranks) < errorTol)
       assert(compareRanks(dynamicRanks, ranks) < errorTol)
 
-      //todo: reference tests for personalized pagerank
+      val p1staticRanks = g.staticPersonalizedPageRank(1, numIter, resetProb).vertices.cache()
+      val p1dynamicRanks = g.personalizedPageRank(1, tol, resetProb).vertices.cache()
+      val p1parallelDynamicRanks =
+        g.staticParallelPersonalizedPageRank(Array(1, 2, 3, 4), numIter, resetProb)
+        .vertices.mapValues(v => v(0)).cache()
+
+      // Computed in igraph 1.0 w/ R bindings:
+      // > page_rank(graph_from_literal( A -+ B -+ C -+ A -+ D), personalized = c(1, 0, 0, 0),
+      //   algo = "arpack")
+      // NOTE: We use the arpack algorithm as prpack (the default) redistributes rank to all
+      // vertices uniformly instead of just to the personalization source.
+      // Alternatively in NetworkX 1.11:
+      // > nx.pagerank(nx.DiGraph([(1,2),(2,3),(3,1),(1,4)]), personalization={1:1, 2:0, 3:0, 4:0})
+      val igraphPR2 = Seq(0.4522329, 0.1921990, 0.1633691, 0.1921990)
+      val ranks2 = VertexRDD(sc.parallelize(1L to 4L zip igraphPR2))
+      assert(compareRanks(p1staticRanks, ranks2) < errorTol)
+      assert(compareRanks(p1dynamicRanks, ranks2) < errorTol)
+      assert(compareRanks(p1parallelDynamicRanks, ranks2) < errorTol)
+
     }
   }
 }

@@ -199,7 +199,8 @@ object PageRank extends Logging {
    * @param resetProb The random reset probability
    * @param sources The list of sources to compute personalized pagerank from
    * @return the graph with vertex attributes
-   *         containing the pagerank relative to all starting nodes (as a sparse vector) and
+   *         containing the pagerank relative to all starting nodes (as a sparse vector
+   *         indexed by the position of nodes in the sources list) and
    *         edge attributes the normalized edge weight
    */
   def runParallelPersonalizedPageRank[VD: ClassTag, ED: ClassTag](graph: Graph[VD, ED],
