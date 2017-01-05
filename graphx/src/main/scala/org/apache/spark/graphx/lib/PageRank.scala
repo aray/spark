@@ -116,14 +116,12 @@ object PageRank extends Logging {
 
     val numVertices = graph.numVertices
     val degGraph: Graph[Int, ED] = graph
-      // Associate the degree with each vertex
+      // Associate the out degree with each vertex
       .outerJoinVertices(graph.outDegrees) { (vid, vdata, deg) => deg.getOrElse(0) }
 
+    // Sinks are vertices without outgoing edges, we need special handling for them.
     val sinks: VertexRDD[Int] = degGraph.vertices.filter(_._2 == 0).cache()
     val hasSink = sinks.count() > 0
-    if (hasSink) {
-      logInfo(s"Graph has sinks which may slow computation of pagerank.")
-    }
 
     // Initialize the PageRank graph with each edge attribute having
     // weight 1/outDegree and each vertex with attribute 1.0.
@@ -149,6 +147,9 @@ object PageRank extends Logging {
       val rankUpdates = rankGraph.aggregateMessages[Double](
         ctx => ctx.sendToDst(ctx.srcAttr * ctx.attr), _ + _, TripletFields.Src)
 
+      // If the graph has sinks compute the rank that would otherwise be distributed to their
+      // outgoing edges so that we can redistribute it to the graph uniformly or to the source
+      // vertex in the personalized case.
       val rankFromSinks: Double = if (hasSink) {
         rankGraph.outerJoinVertices(sinks) {
           (id, rank, zeroOpt) => if (zeroOpt.isDefined) rank else 0.0
@@ -167,6 +168,7 @@ object PageRank extends Logging {
         (src: VertexId, id: VertexId) => resetProb + rankFromSinks / numVertices
       }
 
+      // Using outer join so that all vertices are updated.
       rankGraph = rankGraph.outerJoinVertices(rankUpdates) {
         (id, oldRank, msgSumOpt) => rPrb(src, id) + (1.0 - resetProb) * msgSumOpt.getOrElse(0.0)
       }.cache()
@@ -217,14 +219,12 @@ object PageRank extends Logging {
 
     val numVertices = graph.numVertices
     val degGraph: Graph[Int, ED] = graph
-      // Associate the degree with each vertex
+      // Associate the out degree with each vertex
       .outerJoinVertices(graph.outDegrees) { (vid, vdata, deg) => deg.getOrElse(0) }
 
+    // Sinks are vertices without outgoing edges, we need special handling for them.
     val sinks: VertexRDD[Int] = degGraph.vertices.filter(_._2 == 0).cache()
     val hasSink = sinks.count() > 0
-    if (hasSink) {
-      logInfo(s"Graph has sinks which may slow computation of pagerank.")
-    }
 
     val zero = Vectors.sparse(sources.size, List()).asBreeze
     val sourcesInitMap = sources.zipWithIndex.map { case (vid, i) =>
@@ -255,6 +255,9 @@ object PageRank extends Logging {
         ctx => ctx.sendToDst(ctx.srcAttr :* ctx.attr),
         (a : BV[Double], b : BV[Double]) => a :+ b, TripletFields.Src)
 
+      // If the graph has sinks compute the rank that would otherwise be distributed to their
+      // outgoing edges so that we can redistribute it to the graph uniformly or to the source
+      // vertex in the personalized case.
       val rankFromSinks: BV[Double] = if (hasSink) {
         rankGraph.outerJoinVertices(sinks) {
           (id, rank, zeroOpt) => if (zeroOpt.isDefined) rank else zero
@@ -264,6 +267,7 @@ object PageRank extends Logging {
       }
       val rankFromSinksBC = sc.broadcast(rankFromSinks)
 
+      // Using outer join so that all vertices are updated.
       rankGraph = rankGraph.outerJoinVertices(rankUpdates) {
         (vid, oldRank, msgSumOpt) =>
           val popActivations: BV[Double] = msgSumOpt.getOrElse(zero) :* (1.0 - resetProb)
@@ -276,7 +280,6 @@ object PageRank extends Logging {
         }.cache()
 
       rankGraph.edges.foreachPartition(x => {}) // also materializes rankGraph.vertices
-      //rankFromSinksBC.destroy(false)
       prevRankGraph.vertices.unpersist(false)
       prevRankGraph.edges.unpersist(false)
 
@@ -285,7 +288,6 @@ object PageRank extends Logging {
       i += 1
     }
 
-    //sourcesInitMapBC.destroy(false)
     rankGraph.mapVertices { (vid, attr) =>
       Vectors.fromBreeze(attr)
     }
@@ -339,14 +341,12 @@ object PageRank extends Logging {
 
     val numVertices = graph.numVertices
     val degGraph: Graph[Int, ED] = graph
-      // Associate the degree with each vertex
+      // Associate the out degree with each vertex
       .outerJoinVertices(graph.outDegrees) { (vid, vdata, deg) => deg.getOrElse(0) }
 
+    // Sinks are vertices without outgoing edges, we need special handling for them.
     val sinks: VertexRDD[Int] = degGraph.vertices.filter(_._2 == 0).cache()
     val hasSink = sinks.count() > 0
-    if (hasSink) {
-      logInfo(s"Graph has sinks which may slow computation of pagerank.")
-    }
 
     // Initialize the PageRank graph with each edge attribute having
     // weight 1/outDegree and each vertex with attribute 1.0.
@@ -373,6 +373,9 @@ object PageRank extends Logging {
       val rankUpdates = rankGraph.aggregateMessages[Double](
         ctx => ctx.sendToDst(ctx.srcAttr._1 * ctx.attr), _ + _, TripletFields.Src)
 
+      // If the graph has sinks compute the rank that would otherwise be distributed to their
+      // outgoing edges so that we can redistribute it to the graph uniformly or to the source
+      // vertex in the personalized case.
       val rankFromSinks: Double = if (hasSink) {
         rankGraph.outerJoinVertices(sinks) {
           (id, rankAndDelta, zeroOpt) => if (zeroOpt.isDefined) rankAndDelta._1 else 0.0
@@ -381,7 +384,6 @@ object PageRank extends Logging {
         0.0
       }
 
-      //TODO: UPDATE COMMENTS IN ALL IMPL
       // Apply the final rank updates to get the new ranks, using join to preserve ranks of vertices
       // that didn't receive a message. Requires a shuffle for broadcasting updated ranks to the
       // edge partitions.
@@ -392,6 +394,7 @@ object PageRank extends Logging {
         (src: VertexId, id: VertexId) => resetProb + rankFromSinks / numVertices
       }
 
+      // Using outer join so that all vertices are updated.
       rankGraph = rankGraph.outerJoinVertices(rankUpdates) {
         (id, oldRankAndDelta, msgSumOpt) => {
           val rank = rPrb(src, id) + (1.0 - resetProb) * msgSumOpt.getOrElse(0.0)
@@ -411,6 +414,6 @@ object PageRank extends Logging {
     sinks.unpersist(false)
 
     rankGraph.mapVertices((vid, attr) => attr._1)
-  } // end of deltaPageRank
+  }
 
 }
