@@ -30,4 +30,8 @@ if __name__ == "__main__":
     result = model.freqItemsets().collect()
     for fi in result:
         print(fi)
+
+    rules = model.generateAssociationRules(confidence = 0.8)
+    for rule in rules.collect():
+        print(rule)
     # $example off$
