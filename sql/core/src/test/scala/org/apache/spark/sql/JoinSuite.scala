@@ -35,6 +35,55 @@ class JoinSuite extends QueryTest with SharedSQLContext {
     df.queryExecution.optimizedPlan.stats(sqlConf).sizeInBytes
   }
 
+  test("foo") {
+    val hier = sqlContext.sparkSession.sparkContext.parallelize(Seq(
+      ("A10", "A1"),
+      ("A11", "A1"),
+      ("A20", "A2"),
+      ("A21", "A2"),
+      ("B10", "B1"),
+      ("B11", "B1"),
+      ("B20", "B2"),
+      ("B21", "B2"),
+      ("A1", "A"),
+      ("A2", "A"),
+      ("B1", "B"),
+      ("B2", "B")
+    )).toDF("son", "parent").cache() // passes if cache is removed but with count on line 75
+    hier.registerTempTable("hier")
+    hier.count() // if this is removed it passes
+
+    val base = sqlContext.sparkSession.sparkContext.parallelize(Seq(
+      Tuple1("A10"),
+      Tuple1("A11"),
+      Tuple1("A20"),
+      Tuple1("A21"),
+      Tuple1("B10"),
+      Tuple1("B11"),
+      Tuple1("B20"),
+      Tuple1("B21")
+    )).toDF("id")// .cache()
+    base.registerTempTable("base")
+
+    val dist1 = spark.sql("""
+    SELECT parent level1
+    FROM base INNER JOIN hier h1 ON base.id = h1.son
+    GROUP BY parent""")
+
+    dist1// .cache()
+    dist1.registerTempTable("dist1")
+    // dist1.count() // or put a count here
+
+    val dist2 = spark.sql("""
+    SELECT parent level2
+    FROM dist1 INNER JOIN hier h2 ON dist1.level1 = h2.son
+    GROUP BY parent""")
+
+    // dist2.cache()
+    dist2.registerTempTable("dist2")
+    checkAnswer(dist2, Row("A") :: Row("B") :: Nil)
+  }
+
   test("equi-join is hash-join") {
     val x = testData2.as("x")
     val y = testData2.as("y")

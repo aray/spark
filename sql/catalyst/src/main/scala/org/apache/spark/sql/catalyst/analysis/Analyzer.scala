@@ -148,7 +148,9 @@ class Analyzer(
     Batch("FixNullability", Once,
       FixNullability),
     Batch("Cleanup", fixedPoint,
-      CleanupAliases)
+      CleanupAliases),
+    Batch("RemoveDeepConflicts", Once,
+      RemoveDeepConflicts)
   )
 
   /**
