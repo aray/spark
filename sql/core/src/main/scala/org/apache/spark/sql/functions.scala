@@ -2938,6 +2938,14 @@ object functions {
    */
   def posexplode_outer(e: Column): Column = withExpr { GeneratorOuter(PosExplode(e.expr)) }
 
+  @scala.annotation.varargs
+  def unpivot(col: Column, cols: Column*): Column = withExpr {
+    val allCols = col +: cols
+    val exprs = allCols.map(_.expr)
+    val names: Seq[Expression] = exprs.map(e => Literal(e.prettyName))
+    Explode(CreateMap(names.zip(exprs).flatten))
+  }
+
   /**
    * Extracts json object from a json string based on json path specified, and returns json string
    * of the extracted json object. It will return null if the input json string is invalid.

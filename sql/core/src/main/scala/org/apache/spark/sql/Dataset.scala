@@ -1598,6 +1598,18 @@ class Dataset[T] private[sql](
   @scala.annotation.varargs
   def agg(expr: Column, exprs: Column*): DataFrame = groupBy().agg(expr, exprs : _*)
 
+  @scala.annotation.varargs
+  def unpivot(expr1: Column, expr2: Column, exprs: Column*): DataFrame = {
+    val allExprs: Seq[Column] = expr1 +: expr2 +: exprs
+
+    val generator = UserDefinedGenerator(elementSchema, rowFunction, input.map(_.expr))
+
+    withPlan {
+      Generate(generator, join = true, outer = false,
+        qualifier = None, generatorOutput = Nil, logicalPlan)
+    }
+  }
+
   /**
    * Returns a new Dataset by taking the first `n` rows. The difference between this function
    * and `head` is that `head` is an action and returns an array (by triggering query execution)
