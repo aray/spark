@@ -133,9 +133,6 @@ setMethod("schema",
 #'
 #' Print the logical and physical Catalyst plans to the console for debugging.
 #'
-#' @param x a SparkDataFrame.
-#' @param extended Logical. If extended is FALSE, explain() only prints the physical plan.
-#' @param ... further arguments to be passed to or from other methods.
 #' @family SparkDataFrame functions
 #' @aliases explain,SparkDataFrame-method
 #' @rdname explain
@@ -197,6 +194,7 @@ setMethod("isLocal",
 #'                 20 characters will be truncated. However, if set greater than zero,
 #'                 truncates strings longer than \code{truncate} characters and all cells
 #'                 will be aligned right.
+#' @param vertical whether print output rows vertically (one line per column value).
 #' @param ... further arguments to be passed to or from other methods.
 #' @family SparkDataFrame functions
 #' @aliases showDF,SparkDataFrame-method
@@ -213,12 +211,13 @@ setMethod("isLocal",
 #' @note showDF since 1.4.0
 setMethod("showDF",
           signature(x = "SparkDataFrame"),
-          function(x, numRows = 20, truncate = TRUE) {
+          function(x, numRows = 20, truncate = TRUE, vertical = FALSE) {
             if (is.logical(truncate) && truncate) {
-              s <- callJMethod(x@sdf, "showString", numToInt(numRows), numToInt(20))
+              s <- callJMethod(x@sdf, "showString", numToInt(numRows), numToInt(20), vertical)
             } else {
               truncate2 <- as.numeric(truncate)
-              s <- callJMethod(x@sdf, "showString", numToInt(numRows), numToInt(truncate2))
+              s <- callJMethod(x@sdf, "showString", numToInt(numRows), numToInt(truncate2),
+                               vertical)
             }
             cat(s)
           })
@@ -280,7 +279,7 @@ setMethod("dtypes",
 
 #' Column Names of SparkDataFrame
 #'
-#' Return all column names as a list.
+#' Return a vector of column names.
 #'
 #' @param x a SparkDataFrame.
 #'
@@ -323,10 +322,8 @@ setMethod("names",
 setMethod("names<-",
           signature(x = "SparkDataFrame"),
           function(x, value) {
-            if (!is.null(value)) {
-              sdf <- callJMethod(x@sdf, "toDF", as.list(value))
-              dataFrame(sdf)
-            }
+            colnames(x) <- value
+            x
           })
 
 #' @rdname columns
@@ -340,7 +337,7 @@ setMethod("colnames",
           })
 
 #' @param value a character vector. Must have the same length as the number
-#'              of columns in the SparkDataFrame.
+#'              of columns to be renamed.
 #' @rdname columns
 #' @aliases colnames<-,SparkDataFrame-method
 #' @name colnames<-
@@ -417,7 +414,7 @@ setMethod("coltypes",
                   type <- PRIMITIVE_TYPES[[specialtype]]
                 }
               }
-              type
+              type[[1]]
             })
 
             # Find which types don't have mapping to R
@@ -562,7 +559,7 @@ setMethod("insertInto",
             jmode <- convertToJSaveMode(ifelse(overwrite, "overwrite", "append"))
             write <- callJMethod(x@sdf, "write")
             write <- callJMethod(write, "mode", jmode)
-            callJMethod(write, "insertInto", tableName)
+            invisible(callJMethod(write, "insertInto", tableName))
           })
 
 #' Cache
@@ -680,14 +677,53 @@ setMethod("storageLevel",
             storageLevelToString(callJMethod(x@sdf, "storageLevel"))
           })
 
+#' Coalesce
+#'
+#' Returns a new SparkDataFrame that has exactly \code{numPartitions} partitions.
+#' This operation results in a narrow dependency, e.g. if you go from 1000 partitions to 100
+#' partitions, there will not be a shuffle, instead each of the 100 new partitions will claim 10 of
+#' the current partitions. If a larger number of partitions is requested, it will stay at the
+#' current number of partitions.
+#'
+#' However, if you're doing a drastic coalesce on a SparkDataFrame, e.g. to numPartitions = 1,
+#' this may result in your computation taking place on fewer nodes than
+#' you like (e.g. one node in the case of numPartitions = 1). To avoid this,
+#' call \code{repartition}. This will add a shuffle step, but means the
+#' current upstream partitions will be executed in parallel (per whatever
+#' the current partitioning is).
+#'
+#' @param numPartitions the number of partitions to use.
+#'
+#' @family SparkDataFrame functions
+#' @rdname coalesce
+#' @name coalesce
+#' @aliases coalesce,SparkDataFrame-method
+#' @seealso \link{repartition}
+#' @export
+#' @examples
+#'\dontrun{
+#' sparkR.session()
+#' path <- "path/to/file.json"
+#' df <- read.json(path)
+#' newDF <- coalesce(df, 1L)
+#'}
+#' @note coalesce(SparkDataFrame) since 2.1.1
+setMethod("coalesce",
+          signature(x = "SparkDataFrame"),
+          function(x, numPartitions) {
+            stopifnot(is.numeric(numPartitions))
+            sdf <- callJMethod(x@sdf, "coalesce", numToInt(numPartitions))
+            dataFrame(sdf)
+          })
+
 #' Repartition
 #'
 #' The following options for repartition are possible:
 #' \itemize{
-#'  \item{1.} {Return a new SparkDataFrame partitioned by
+#'  \item{1.} {Return a new SparkDataFrame that has exactly \code{numPartitions}.}
+#'  \item{2.} {Return a new SparkDataFrame hash partitioned by
 #'                      the given columns into \code{numPartitions}.}
-#'  \item{2.} {Return a new SparkDataFrame that has exactly \code{numPartitions}.}
-#'  \item{3.} {Return a new SparkDataFrame partitioned by the given column(s),
+#'  \item{3.} {Return a new SparkDataFrame hash partitioned by the given column(s),
 #'                      using \code{spark.sql.shuffle.partitions} as number of partitions.}
 #'}
 #' @param x a SparkDataFrame.
@@ -699,6 +735,7 @@ setMethod("storageLevel",
 #' @rdname repartition
 #' @name repartition
 #' @aliases repartition,SparkDataFrame-method
+#' @seealso \link{coalesce}
 #' @export
 #' @examples
 #'\dontrun{
@@ -1138,6 +1175,7 @@ setMethod("collect",
                   if (!is.null(PRIMITIVE_TYPES[[colType]]) && colType != "binary") {
                     vec <- do.call(c, col)
                     stopifnot(class(vec) != "list")
+                    class(vec) <- PRIMITIVE_TYPES[[colType]]
                     df[[colIndex]] <- vec
                   } else {
                     df[[colIndex]] <- col
@@ -1285,7 +1323,7 @@ setMethod("toRDD",
 #' Groups the SparkDataFrame using the specified columns, so we can run aggregation on them.
 #'
 #' @param x a SparkDataFrame.
-#' @param ... variable(s) (character names(s) or Column(s)) to group on.
+#' @param ... character name(s) or Column(s) to group on.
 #' @return A GroupedData.
 #' @family SparkDataFrame functions
 #' @aliases groupBy,SparkDataFrame-method
@@ -1301,6 +1339,7 @@ setMethod("toRDD",
 #'   agg(groupBy(df, "department", "gender"), salary="avg", "age" -> "max")
 #' }
 #' @note groupBy since 1.4.0
+#' @seealso \link{agg}, \link{cube}, \link{rollup}
 setMethod("groupBy",
            signature(x = "SparkDataFrame"),
            function(x, ...) {
@@ -1717,6 +1756,23 @@ getColumn <- function(x, c) {
   column(callJMethod(x@sdf, "col", c))
 }
 
+setColumn <- function(x, c, value) {
+  if (class(value) != "Column" && !is.null(value)) {
+    if (isAtomicLengthOne(value)) {
+      value <- lit(value)
+    } else {
+      stop("value must be a Column, literal value as atomic in length of 1, or NULL")
+    }
+  }
+
+  if (is.null(value)) {
+    nx <- drop(x, c)
+  } else {
+    nx <- withColumn(x, c, value)
+  }
+  nx
+}
+
 #' @param name name of a Column (without being wrapped by \code{""}).
 #' @rdname select
 #' @name $
@@ -1735,19 +1791,7 @@ setMethod("$", signature(x = "SparkDataFrame"),
 #' @note $<- since 1.4.0
 setMethod("$<-", signature(x = "SparkDataFrame"),
           function(x, name, value) {
-            if (class(value) != "Column" && !is.null(value)) {
-              if (isAtomicLengthOne(value)) {
-                value <- lit(value)
-              } else {
-                stop("value must be a Column, literal value as atomic in length of 1, or NULL")
-              }
-            }
-
-            if (is.null(value)) {
-              nx <- drop(x, name)
-            } else {
-              nx <- withColumn(x, name, value)
-            }
+            nx <- setColumn(x, name, value)
             x@sdf <- nx@sdf
             x
           })
@@ -1760,11 +1804,34 @@ setClassUnion("numericOrcharacter", c("numeric", "character"))
 #' @note [[ since 1.4.0
 setMethod("[[", signature(x = "SparkDataFrame", i = "numericOrcharacter"),
           function(x, i) {
+            if (length(i) > 1) {
+              warning("Subset index has length > 1. Only the first index is used.")
+              i <- i[1]
+            }
             if (is.numeric(i)) {
               cols <- columns(x)
               i <- cols[[i]]
             }
             getColumn(x, i)
+          })
+
+#' @rdname subset
+#' @name [[<-
+#' @aliases [[<-,SparkDataFrame,numericOrcharacter-method
+#' @note [[<- since 2.1.1
+setMethod("[[<-", signature(x = "SparkDataFrame", i = "numericOrcharacter"),
+          function(x, i, value) {
+            if (length(i) > 1) {
+              warning("Subset index has length > 1. Only the first index is used.")
+              i <- i[1]
+            }
+            if (is.numeric(i)) {
+              cols <- columns(x)
+              i <- cols[[i]]
+            }
+            nx <- setColumn(x, i, value)
+            x@sdf <- nx@sdf
+            x
           })
 
 #' @rdname subset
@@ -1811,14 +1878,19 @@ setMethod("[", signature(x = "SparkDataFrame"),
 #' Return subsets of SparkDataFrame according to given conditions
 #' @param x a SparkDataFrame.
 #' @param i,subset (Optional) a logical expression to filter on rows.
+#'                 For extract operator [[ and replacement operator [[<-, the indexing parameter for
+#'                 a single Column.
 #' @param j,select expression for the single Column or a list of columns to select from the SparkDataFrame.
 #' @param drop if TRUE, a Column will be returned if the resulting dataset has only one column.
 #'             Otherwise, a SparkDataFrame will always be returned.
+#' @param value a Column or an atomic vector in the length of 1 as literal value, or \code{NULL}.
+#'              If \code{NULL}, the specified Column is dropped.
 #' @param ... currently not used.
 #' @return A new SparkDataFrame containing only the rows that meet the condition with selected columns.
 #' @export
 #' @family SparkDataFrame functions
 #' @aliases subset,SparkDataFrame-method
+#' @seealso \link{withColumn}
 #' @rdname subset
 #' @name subset
 #' @family subsetting functions
@@ -1836,6 +1908,10 @@ setMethod("[", signature(x = "SparkDataFrame"),
 #'   subset(df, df$age %in% c(19, 30), 1:2)
 #'   subset(df, df$age %in% c(19), select = c(1,2))
 #'   subset(df, select = c(1,2))
+#'   # Columns can be selected and set
+#'   df[["age"]] <- 23
+#'   df[[1]] <- df$age
+#'   df[[2]] <- NULL # drop column
 #' }
 #' @note subset since 1.5.0
 setMethod("subset", signature(x = "SparkDataFrame"),
@@ -1960,7 +2036,7 @@ setMethod("selectExpr",
 #' @aliases withColumn,SparkDataFrame,character-method
 #' @rdname withColumn
 #' @name withColumn
-#' @seealso \link{rename} \link{mutate}
+#' @seealso \link{rename} \link{mutate} \link{subset}
 #' @export
 #' @examples
 #'\dontrun{
@@ -1971,6 +2047,10 @@ setMethod("selectExpr",
 #' # Replace an existing column
 #' newDF2 <- withColumn(newDF, "newCol", newDF$col1)
 #' newDF3 <- withColumn(newDF, "newCol", 42)
+#' # Use extract operator to set an existing or new column
+#' df[["age"]] <- 23
+#' df[[2]] <- df$col1
+#' df[[2]] <- NULL # drop column
 #' }
 #' @note withColumn since 1.4.0
 setMethod("withColumn",
@@ -2562,6 +2642,7 @@ generateAliasesForIntersectedCols <- function (x, intersectedColNames, suffix) {
 #'
 #' Return a new SparkDataFrame containing the union of rows in this SparkDataFrame
 #' and another SparkDataFrame. This is equivalent to \code{UNION ALL} in SQL.
+#' Input SparkDataFrames can have different schemas (names and data types).
 #'
 #' Note: This does not remove duplicate rows across the two SparkDataFrames.
 #'
@@ -2605,7 +2686,8 @@ setMethod("unionAll",
 
 #' Union two or more SparkDataFrames
 #'
-#' Union two or more SparkDataFrames. This is equivalent to \code{UNION ALL} in SQL.
+#' Union two or more SparkDataFrames by row. As in R's \code{rbind}, this method
+#' requires that the input SparkDataFrames have the same column names.
 #'
 #' Note: This does not remove duplicate rows across the two SparkDataFrames.
 #'
@@ -2629,6 +2711,10 @@ setMethod("unionAll",
 setMethod("rbind",
           signature(... = "SparkDataFrame"),
           function(x, ..., deparse.level = 1) {
+            nm <- lapply(list(x, ...), names)
+            if (length(unique(nm)) != 1) {
+              stop("Names of input data frames are different.")
+            }
             if (nargs() == 3) {
               union(x, ...)
             } else {
@@ -2735,14 +2821,14 @@ setMethod("write.df",
           signature(df = "SparkDataFrame"),
           function(df, path = NULL, source = NULL, mode = "error", ...) {
             if (!is.null(path) && !is.character(path)) {
-              stop("path should be charactor, NULL or omitted.")
+              stop("path should be character, NULL or omitted.")
             }
             if (!is.null(source) && !is.character(source)) {
               stop("source should be character, NULL or omitted. It is the datasource specified ",
                    "in 'spark.sql.sources.default' configuration by default.")
             }
             if (!is.character(mode)) {
-              stop("mode should be charactor or omitted. It is 'error' by default.")
+              stop("mode should be character or omitted. It is 'error' by default.")
             }
             if (is.null(source)) {
               source <- getDefaultSqlSource()
@@ -2811,7 +2897,7 @@ setMethod("saveAsTable",
             write <- callJMethod(write, "format", source)
             write <- callJMethod(write, "mode", jmode)
             write <- callJMethod(write, "options", options)
-            callJMethod(write, "saveAsTable", tableName)
+            invisible(callJMethod(write, "saveAsTable", tableName))
           })
 
 #' summary
@@ -2957,7 +3043,7 @@ setMethod("fillna",
           signature(x = "SparkDataFrame"),
           function(x, value, cols = NULL) {
             if (!(class(value) %in% c("integer", "numeric", "character", "list"))) {
-              stop("value should be an integer, numeric, charactor or named list.")
+              stop("value should be an integer, numeric, character or named list.")
             }
 
             if (class(value) == "list") {
@@ -2969,7 +3055,7 @@ setMethod("fillna",
               # Check each item in the named list is of valid type
               lapply(value, function(v) {
                 if (!(class(v) %in% c("integer", "numeric", "character"))) {
-                  stop("Each item in value should be an integer, numeric or charactor.")
+                  stop("Each item in value should be an integer, numeric or character.")
                 }
               })
 
@@ -3405,4 +3491,227 @@ setMethod("randomSplit",
               sdfs <- callJMethod(x@sdf, "randomSplit", normalized_list)
             }
             sapply(sdfs, dataFrame)
+          })
+
+#' getNumPartitions
+#'
+#' Return the number of partitions
+#'
+#' @param x A SparkDataFrame
+#' @family SparkDataFrame functions
+#' @aliases getNumPartitions,SparkDataFrame-method
+#' @rdname getNumPartitions
+#' @name getNumPartitions
+#' @export
+#' @examples
+#'\dontrun{
+#' sparkR.session()
+#' df <- createDataFrame(cars, numPartitions = 2)
+#' getNumPartitions(df)
+#' }
+#' @note getNumPartitions since 2.1.1
+setMethod("getNumPartitions",
+          signature(x = "SparkDataFrame"),
+          function(x) {
+            callJMethod(callJMethod(x@sdf, "rdd"), "getNumPartitions")
+          })
+
+#' isStreaming
+#'
+#' Returns TRUE if this SparkDataFrame contains one or more sources that continuously return data
+#' as it arrives.
+#'
+#' @param x A SparkDataFrame
+#' @return TRUE if this SparkDataFrame is from a streaming source
+#' @family SparkDataFrame functions
+#' @aliases isStreaming,SparkDataFrame-method
+#' @rdname isStreaming
+#' @name isStreaming
+#' @seealso \link{read.stream} \link{write.stream}
+#' @export
+#' @examples
+#'\dontrun{
+#' sparkR.session()
+#' df <- read.stream("socket", host = "localhost", port = 9999)
+#' isStreaming(df)
+#' }
+#' @note isStreaming since 2.2.0
+#' @note experimental
+setMethod("isStreaming",
+          signature(x = "SparkDataFrame"),
+          function(x) {
+            callJMethod(x@sdf, "isStreaming")
+          })
+
+#' Write the streaming SparkDataFrame to a data source.
+#'
+#' The data source is specified by the \code{source} and a set of options (...).
+#' If \code{source} is not specified, the default data source configured by
+#' spark.sql.sources.default will be used.
+#'
+#' Additionally, \code{outputMode} specifies how data of a streaming SparkDataFrame is written to a
+#' output data source. There are three modes:
+#' \itemize{
+#'   \item append: Only the new rows in the streaming SparkDataFrame will be written out. This
+#'                 output mode can be only be used in queries that do not contain any aggregation.
+#'   \item complete: All the rows in the streaming SparkDataFrame will be written out every time
+#'                   there are some updates. This output mode can only be used in queries that
+#'                   contain aggregations.
+#'   \item update: Only the rows that were updated in the streaming SparkDataFrame will be written
+#'                 out every time there are some updates. If the query doesn't contain aggregations,
+#'                 it will be equivalent to \code{append} mode.
+#' }
+#'
+#' @param df a streaming SparkDataFrame.
+#' @param source a name for external data source.
+#' @param outputMode one of 'append', 'complete', 'update'.
+#' @param ... additional argument(s) passed to the method.
+#'
+#' @family SparkDataFrame functions
+#' @seealso \link{read.stream}
+#' @aliases write.stream,SparkDataFrame-method
+#' @rdname write.stream
+#' @name write.stream
+#' @export
+#' @examples
+#'\dontrun{
+#' sparkR.session()
+#' df <- read.stream("socket", host = "localhost", port = 9999)
+#' isStreaming(df)
+#' wordCounts <- count(group_by(df, "value"))
+#'
+#' # console
+#' q <- write.stream(wordCounts, "console", outputMode = "complete")
+#' # text stream
+#' q <- write.stream(df, "text", path = "/home/user/out", checkpointLocation = "/home/user/cp")
+#' # memory stream
+#' q <- write.stream(wordCounts, "memory", queryName = "outs", outputMode = "complete")
+#' head(sql("SELECT * from outs"))
+#' queryName(q)
+#'
+#' stopQuery(q)
+#' }
+#' @note write.stream since 2.2.0
+#' @note experimental
+setMethod("write.stream",
+          signature(df = "SparkDataFrame"),
+          function(df, source = NULL, outputMode = NULL, ...) {
+            if (!is.null(source) && !is.character(source)) {
+              stop("source should be character, NULL or omitted. It is the data source specified ",
+                   "in 'spark.sql.sources.default' configuration by default.")
+            }
+            if (!is.null(outputMode) && !is.character(outputMode)) {
+              stop("outputMode should be character or omitted.")
+            }
+            if (is.null(source)) {
+              source <- getDefaultSqlSource()
+            }
+            options <- varargsToStrEnv(...)
+            write <- handledCallJMethod(df@sdf, "writeStream")
+            write <- callJMethod(write, "format", source)
+            if (!is.null(outputMode)) {
+              write <- callJMethod(write, "outputMode", outputMode)
+            }
+            write <- callJMethod(write, "options", options)
+            ssq <- handledCallJMethod(write, "start")
+            streamingQuery(ssq)
+          })
+
+#' checkpoint
+#'
+#' Returns a checkpointed version of this SparkDataFrame. Checkpointing can be used to truncate the
+#' logical plan, which is especially useful in iterative algorithms where the plan may grow
+#' exponentially. It will be saved to files inside the checkpoint directory set with
+#' \code{setCheckpointDir}
+#'
+#' @param x A SparkDataFrame
+#' @param eager whether to checkpoint this SparkDataFrame immediately
+#' @return a new checkpointed SparkDataFrame
+#' @family SparkDataFrame functions
+#' @aliases checkpoint,SparkDataFrame-method
+#' @rdname checkpoint
+#' @name checkpoint
+#' @seealso \link{setCheckpointDir}
+#' @export
+#' @examples
+#'\dontrun{
+#' setCheckpointDir("/checkpoint")
+#' df <- checkpoint(df)
+#' }
+#' @note checkpoint since 2.2.0
+setMethod("checkpoint",
+          signature(x = "SparkDataFrame"),
+          function(x, eager = TRUE) {
+            df <- callJMethod(x@sdf, "checkpoint", as.logical(eager))
+            dataFrame(df)
+          })
+
+#' cube
+#'
+#' Create a multi-dimensional cube for the SparkDataFrame using the specified columns.
+#'
+#' If grouping expression is missing \code{cube} creates a single global aggregate and is equivalent to
+#' direct application of \link{agg}.
+#'
+#' @param x a SparkDataFrame.
+#' @param ... character name(s) or Column(s) to group on.
+#' @return A GroupedData.
+#' @family SparkDataFrame functions
+#' @aliases cube,SparkDataFrame-method
+#' @rdname cube
+#' @name cube
+#' @export
+#' @examples
+#' \dontrun{
+#' df <- createDataFrame(mtcars)
+#' mean(cube(df, "cyl", "gear", "am"), "mpg")
+#'
+#' # Following calls are equivalent
+#' agg(cube(carsDF), mean(carsDF$mpg))
+#' agg(carsDF, mean(carsDF$mpg))
+#' }
+#' @note cube since 2.3.0
+#' @seealso \link{agg}, \link{groupBy}, \link{rollup}
+setMethod("cube",
+          signature(x = "SparkDataFrame"),
+          function(x, ...) {
+            cols <- list(...)
+            jcol <- lapply(cols, function(x) if (class(x) == "Column") x@jc else column(x)@jc)
+            sgd <- callJMethod(x@sdf, "cube", jcol)
+            groupedData(sgd)
+          })
+
+#' rollup
+#'
+#' Create a multi-dimensional rollup for the SparkDataFrame using the specified columns.
+#'
+#' If grouping expression is missing \code{rollup} creates a single global aggregate and is equivalent to
+#' direct application of \link{agg}.
+#'
+#' @param x a SparkDataFrame.
+#' @param ... character name(s) or Column(s) to group on.
+#' @return A GroupedData.
+#' @family SparkDataFrame functions
+#' @aliases rollup,SparkDataFrame-method
+#' @rdname rollup
+#' @name rollup
+#' @export
+#' @examples
+#'\dontrun{
+#' df <- createDataFrame(mtcars)
+#' mean(rollup(df, "cyl", "gear", "am"), "mpg")
+#'
+#' # Following calls are equivalent
+#' agg(rollup(carsDF), mean(carsDF$mpg))
+#' agg(carsDF, mean(carsDF$mpg))
+#' }
+#' @note rollup since 2.3.0
+#' @seealso \link{agg}, \link{cube}, \link{groupBy}
+setMethod("rollup",
+          signature(x = "SparkDataFrame"),
+          function(x, ...) {
+            cols <- list(...)
+            jcol <- lapply(cols, function(x) if (class(x) == "Column") x@jc else column(x)@jc)
+            sgd <- callJMethod(x@sdf, "rollup", jcol)
+            groupedData(sgd)
           })

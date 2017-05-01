@@ -77,6 +77,24 @@ test_that("spark.glm and predict", {
   out <- capture.output(print(summary(model)))
   expect_true(any(grepl("Dispersion parameter for gamma family", out)))
 
+  # tweedie family
+  model <- spark.glm(training, Sepal_Width ~ Sepal_Length + Species,
+                     family = "tweedie", var.power = 1.2, link.power = 0.0)
+  prediction <- predict(model, training)
+  expect_equal(typeof(take(select(prediction, "prediction"), 1)$prediction), "double")
+  vals <- collect(select(prediction, "prediction"))
+
+  # manual calculation of the R predicted values to avoid dependence on statmod
+  #' library(statmod)
+  #' rModel <- glm(Sepal.Width ~ Sepal.Length + Species, data = iris,
+  #'             family = tweedie(var.power = 1.2, link.power = 0.0))
+  #' print(coef(rModel))
+
+  rCoef <- c(0.6455409, 0.1169143, -0.3224752, -0.3282174)
+  rVals <- exp(as.numeric(model.matrix(Sepal.Width ~ Sepal.Length + Species,
+                                       data = iris) %*% rCoef))
+  expect_true(all(abs(rVals - vals) < 1e-5), rVals - vals)
+
   # Test stats::predict is working
   x <- rnorm(15)
   y <- x + rnorm(15)
@@ -87,11 +105,14 @@ test_that("spark.glm summary", {
   # gaussian family
   training <- suppressWarnings(createDataFrame(iris))
   stats <- summary(spark.glm(training, Sepal_Width ~ Sepal_Length + Species))
-
   rStats <- summary(glm(Sepal.Width ~ Sepal.Length + Species, data = iris))
 
-  coefs <- unlist(stats$coefficients)
-  rCoefs <- unlist(rStats$coefficients)
+  # test summary coefficients return matrix type
+  expect_true(class(stats$coefficients) == "matrix")
+  expect_true(class(stats$coefficients[, 1]) == "numeric")
+
+  coefs <- stats$coefficients
+  rCoefs <- rStats$coefficients
   expect_true(all(abs(rCoefs - coefs) < 1e-4))
   expect_true(all(
     rownames(stats$coefficients) ==
@@ -117,8 +138,8 @@ test_that("spark.glm summary", {
   rStats <- summary(glm(Species ~ Sepal.Length + Sepal.Width, data = rTraining,
                         family = binomial(link = "logit")))
 
-  coefs <- unlist(stats$coefficients)
-  rCoefs <- unlist(rStats$coefficients)
+  coefs <- stats$coefficients
+  rCoefs <- rStats$coefficients
   expect_true(all(abs(rCoefs - coefs) < 1e-4))
   expect_true(all(
     rownames(stats$coefficients) ==
@@ -141,8 +162,8 @@ test_that("spark.glm summary", {
   stats <- summary(spark.glm(df, b ~ a1 + a2, family = "binomial", weightCol = "w"))
   rStats <- summary(glm(b ~ a1 + a2, family = "binomial", data = data, weights = w))
 
-  coefs <- unlist(stats$coefficients)
-  rCoefs <- unlist(rStats$coefficients)
+  coefs <- stats$coefficients
+  rCoefs <- rStats$coefficients
   expect_true(all(abs(rCoefs - coefs) < 1e-3))
   expect_true(all(rownames(stats$coefficients) == c("(Intercept)", "a1", "a2")))
   expect_equal(stats$dispersion, rStats$dispersion)
@@ -169,7 +190,7 @@ test_that("spark.glm summary", {
   data <- as.data.frame(cbind(A, b))
   df <- createDataFrame(data)
   stats <- summary(spark.glm(df, b ~ . - 1))
-  coefs <- unlist(stats$coefficients)
+  coefs <- stats$coefficients
   expect_true(all(abs(c(0.5, 0.25) - coefs) < 1e-4))
 })
 
@@ -230,7 +251,7 @@ test_that("glm and predict", {
   training <- suppressWarnings(createDataFrame(iris))
   # gaussian family
   model <- glm(Sepal_Width ~ Sepal_Length + Species, data = training)
-               prediction <- predict(model, training)
+  prediction <- predict(model, training)
   expect_equal(typeof(take(select(prediction, "prediction"), 1)$prediction), "double")
   vals <- collect(select(prediction, "prediction"))
   rVals <- predict(glm(Sepal.Width ~ Sepal.Length + Species, data = iris), iris)
@@ -246,6 +267,24 @@ test_that("glm and predict", {
                                         data = iris, family = poisson(link = identity)), iris))
   expect_true(all(abs(rVals - vals) < 1e-6), rVals - vals)
 
+  # tweedie family
+  model <- glm(Sepal_Width ~ Sepal_Length + Species, data = training,
+               family = "tweedie", var.power = 1.2, link.power = 0.0)
+  prediction <- predict(model, training)
+  expect_equal(typeof(take(select(prediction, "prediction"), 1)$prediction), "double")
+  vals <- collect(select(prediction, "prediction"))
+
+  # manual calculation of the R predicted values to avoid dependence on statmod
+  #' library(statmod)
+  #' rModel <- glm(Sepal.Width ~ Sepal.Length + Species, data = iris,
+  #'             family = tweedie(var.power = 1.2, link.power = 0.0))
+  #' print(coef(rModel))
+
+  rCoef <- c(0.6455409, 0.1169143, -0.3224752, -0.3282174)
+  rVals <- exp(as.numeric(model.matrix(Sepal.Width ~ Sepal.Length + Species,
+                                   data = iris) %*% rCoef))
+  expect_true(all(abs(rVals - vals) < 1e-5), rVals - vals)
+
   # Test stats::predict is working
   x <- rnorm(15)
   y <- x + rnorm(15)
@@ -259,8 +298,8 @@ test_that("glm summary", {
 
   rStats <- summary(glm(Sepal.Width ~ Sepal.Length + Species, data = iris))
 
-  coefs <- unlist(stats$coefficients)
-  rCoefs <- unlist(rStats$coefficients)
+  coefs <- stats$coefficients
+  rCoefs <- rStats$coefficients
   expect_true(all(abs(rCoefs - coefs) < 1e-4))
   expect_true(all(
     rownames(stats$coefficients) ==
@@ -282,8 +321,8 @@ test_that("glm summary", {
   rStats <- summary(glm(Species ~ Sepal.Length + Sepal.Width, data = rTraining,
                         family = binomial(link = "logit")))
 
-  coefs <- unlist(stats$coefficients)
-  rCoefs <- unlist(rStats$coefficients)
+  coefs <- stats$coefficients
+  rCoefs <- rStats$coefficients
   expect_true(all(abs(rCoefs - coefs) < 1e-4))
   expect_true(all(
     rownames(stats$coefficients) ==

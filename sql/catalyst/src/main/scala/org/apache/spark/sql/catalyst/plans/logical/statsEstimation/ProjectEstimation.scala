@@ -17,14 +17,14 @@
 
 package org.apache.spark.sql.catalyst.plans.logical.statsEstimation
 
-import org.apache.spark.sql.catalyst.CatalystConf
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeMap}
 import org.apache.spark.sql.catalyst.plans.logical.{Project, Statistics}
+import org.apache.spark.sql.internal.SQLConf
 
 object ProjectEstimation {
   import EstimationUtils._
 
-  def estimate(conf: CatalystConf, project: Project): Option[Statistics] = {
+  def estimate(conf: SQLConf, project: Project): Option[Statistics] = {
     if (rowCountsExist(conf, project.child)) {
       val childStats = project.child.stats(conf)
       val inputAttrStats = childStats.attributeStats
@@ -36,7 +36,7 @@ object ProjectEstimation {
       val outputAttrStats =
         getOutputMap(AttributeMap(inputAttrStats.toSeq ++ aliasStats), project.output)
       Some(childStats.copy(
-        sizeInBytes = getOutputSize(project.output, outputAttrStats, childStats.rowCount.get),
+        sizeInBytes = getOutputSize(project.output, childStats.rowCount.get, outputAttrStats),
         attributeStats = outputAttrStats))
     } else {
       None
