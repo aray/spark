@@ -36,7 +36,7 @@ class JoinSuite extends QueryTest with SharedSQLContext {
     df.queryExecution.optimizedPlan.stats(sqlConf).sizeInBytes
   }
 
-  test("foo") {
+  test("Deep conflicts from repeated joins to same table") {
     val hier = sqlContext.sparkSession.sparkContext.parallelize(Seq(
       ("A10", "A1"),
       ("A11", "A1"),
@@ -50,8 +50,8 @@ class JoinSuite extends QueryTest with SharedSQLContext {
       ("A2", "A"),
       ("B1", "B"),
       ("B2", "B")
-    )).toDF("son", "parent").cache() // passes if cache is removed but with count on line 75
-    hier.registerTempTable("hier")
+    )).toDF("son", "parent").cache() // passes if cache is removed but with count on dist1
+    hier.createOrReplaceTempView("hier")
     hier.count() // if this is removed it passes
 
     val base = sqlContext.sparkSession.sparkContext.parallelize(Seq(
@@ -63,16 +63,16 @@ class JoinSuite extends QueryTest with SharedSQLContext {
       Tuple1("B11"),
       Tuple1("B20"),
       Tuple1("B21")
-    )).toDF("id")// .cache()
-    base.registerTempTable("base")
+    )).toDF("id")
+    base.createOrReplaceTempView("base")
 
     val dist1 = spark.sql("""
     SELECT parent level1
     FROM base INNER JOIN hier h1 ON base.id = h1.son
     GROUP BY parent""")
 
-    dist1// .cache()
-    dist1.registerTempTable("dist1")
+    dist1
+    dist1.createOrReplaceTempView("dist1")
     // dist1.count() // or put a count here
 
     val dist2 = spark.sql("""
@@ -80,8 +80,7 @@ class JoinSuite extends QueryTest with SharedSQLContext {
     FROM dist1 INNER JOIN hier h2 ON dist1.level1 = h2.son
     GROUP BY parent""")
 
-    // dist2.cache()
-    dist2.registerTempTable("dist2")
+    dist2.createOrReplaceTempView("dist2")
     checkAnswer(dist2, Row("A") :: Row("B") :: Nil)
   }
 
