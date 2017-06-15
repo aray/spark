@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets
 import scala.util.Random
 
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
 import org.apache.spark.sql.functions._
@@ -34,6 +35,22 @@ import org.apache.spark.sql.types._
  */
 class DataFrameFunctionsSuite extends QueryTest with SharedSQLContext {
   import testImplicits._
+
+  test("ensure all functions in FunctionRegistry are in org.apache.spark.sql.functions") {
+    val r = """^([a-z].*)""".r
+    val functionsInReg = FunctionRegistry.expressions.keys.flatMap {
+      case r(f) => Seq(f)
+      case _ => Seq()
+    }.toSet
+    println(functionsInReg)
+
+    val foo = functions.getClass.getMethods.map(_.getName.toLowerCase).toSet
+    println(foo)
+
+    val bar = functionsInReg.filterNot(foo.contains(_))
+    println(bar)
+    println(foo.filterNot(functionsInReg.contains(_)))
+  }
 
   test("array with column name") {
     val df = Seq((0, 1)).toDF("a", "b")
