@@ -138,6 +138,8 @@ case class Alias(child: Expression, name: String)(
 
   override def eval(input: InternalRow): Any = child.eval(input)
 
+  override lazy val canonicalized: Expression = child.canonicalized
+
   /** Just a simple passthrough for code generation. */
   override def genCode(ctx: CodegenContext): ExprCode = child.genCode(ctx)
   override protected def doGenCode(ctx: CodegenContext, ev: ExprCode): ExprCode = ev.copy("")
